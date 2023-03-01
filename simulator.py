@@ -53,7 +53,6 @@ class ServerUDP():
 
         ServerUDP.__count += 1
         self.name = ServerUDP.__count # порядковый номер
-        print('[+] I am object #%d'%(self.name,))
 
     def startSocket(self):
         #% Сокет приёмника
@@ -119,11 +118,11 @@ class ServerUDP():
     # def setU(self, U):
     #     self.U = U
 
-#%%
-with ServerUDP(bindPort=7003) as dev:
-    while True:
-        if dev.cmdIsReceived():
-            dev.Exec()
+##%% Проверка
+# with ServerUDP(bindPort=7003) as dev:
+#     while True:
+#         if dev.cmdIsReceived():
+#             dev.Exec()
 
 # %%
 # Класс приёмопередатчика UDP (основа для ЗУ и нагрузки)
@@ -131,43 +130,48 @@ class ServerClientUDP(ServerUDP):
     """ добавляется клиент, транслирующий команды последующему серверу """
     def __init__(self, bindPort, hostPort, hostIP=None):
         super().__init__(bindPort)
-        if self.hostIP is None:
+        if hostIP is None:
             self.hostAddr = (getIP(), hostPort)
         else:
             self.hostAddr = (hostIP, hostPort)
 
-    def startSocket(self):
-        super().startSocket()
-        #% Достраиваем сокет
+    def AckChild(self, outcome, Address):
+        # запрос слейва hostAddr, потом реконнект к Address
         self.server.connect(self.hostAddr)
-        print('[+] Connected to %s:%d' %(self.hostIP, self.hostPort))
+        self.Send(outcome, self.hostAddr)
+        while True: # циклимся на время ожидания ответа
+            if self.cmdIsReceived(): # когда получили (здесь пауза)
+                outcome = self.income # транслируем наверх
+                # if self.senderAddr==self.hostAddr: # и если от слейва
+            else: # иначе - ответ "нет ответа от слейва"
+                outcome = (CMD['NoAnsFromChild'], 0.)
+            break
+        self.server.connect(Address)
+        return outcome
 
     def Exec(self): # переопределяем метод
-        """ выполняем команду """
-        cmd = self.income[0] # команда
+        """ выполняем принятую команду """
         serverAddr = self.senderAddr # адрес, с которого пришла команда
-
+        if self.income[0] in CMDR.keys():
+            cmd = CMDR[self.income[0]] # если команда известна, идём на её обработку
+        else:
+            cmd = 'Unknown'
+        # отрабатываем команды
         if cmd=='GetName':
             outcome = (CMD[cmd], float(self.name))
         elif cmd=='GetChildName':
-            outcome = (CMD['GetName'], 0.)
-            self.Send(outcome, self.hostAddr)
-            while True: # циклимся на время ожидания ответа
-                if self.cmdIsReceived(): # когда получили
-                    if self.senderAddr==self.hostAddr: # и если от слейва
-                        outcome = self.income # транслируем наверх
-                    else: # иначе - ответ "нет ответа от слейва"
-                        outcome = (CMD['NoAnsFromChild'], 0.)
-                    break
-
+            outcome = self.AckChild((CMD['GetName'], 0.), serverAddr)
         else:
             print('[*] no code for execute this command...')
             outcome = self.income
 
         self.Send(outcome, serverAddr)
 
-
-
+#%% Проверка
+with ServerClientUDP(bindPort=7004, hostPort=7003) as dev:
+    while True:
+        if dev.cmdIsReceived():
+            dev.Exec()
 
 #%%
 class Charger(Device):

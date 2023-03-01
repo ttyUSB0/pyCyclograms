@@ -76,11 +76,11 @@ class Communicator():
         self.close()
 
 #%%
-comm = Communicator(hostPort=7003)
+comm = Communicator(hostPort=7004)
 comm.connect()
 
-#%%
-comm.send('Unknown', 0.)
+#%% GetChildName GetName
+comm.send('GetChildName', 0.)
 Ans = comm.listen()
 print(Ans)
 
