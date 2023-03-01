@@ -14,7 +14,8 @@ CMD = {'Timeout':-2, #выход по таймауту
        'GetU':1, 'SetU':2,
        'GetI':3, 'SetI':4,
        'GetC':5, 'SetC':6,
-       'Unknown':100}
+       'GetChildName':7,
+       'Unknown':100, 'NoAnsFromChild':101}
 CMDR = {} # ревёрснутый массив кодов
 for key, val in CMD.items():
     CMDR[val] = key
@@ -47,7 +48,7 @@ class ServerUDP():
     def __init__(self, bindPort):
         self.packetStruct = 'if' # структура пакета
         self.income = ['Timeout', 0] # входящая команда, со стороны клиента, я - сервер
-        self.outcome = ['Timeout', 0] # ответ клиенту
+        # self.outcome = ['Timeout', 0] # ответ клиенту
         self.bindAddr = (getIP(), bindPort) # порт, который я слушаю, приёмник
 
         ServerUDP.__count += 1
@@ -62,7 +63,7 @@ class ServerUDP():
         self.server.settimeout(1.5)
         print('[*] Ready to receive Ack on %s:%d' %(self.bindAddr))
 
-    def close(self):
+    def closeSocket(self):
         self.server.close()
         print('[+] server closed...')
 
@@ -70,36 +71,36 @@ class ServerUDP():
         self.startSocket()
         return self
     def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+        self.closeSocket()
 
     def cmdIsReceived(self):
         """ слушаем порт и определяем команду """
         try:
             packet, self.senderAddr = self.server.recvfrom(64)
-            cmdIdx, data = struct.unpack(self.packetStruct, packet)
-            self.income = (CMDR[cmdIdx], data)
+            self.income = struct.unpack(self.packetStruct, packet)
         except socket.timeout:
-            self.income = ('Timeout', 0.)
             return False
-        # except KeyboardInterrupt:
-        #     print('\n[!] Ctrl+C, exiting...')
-        #     exit()
-        # except Exception():
-        #     self.incomeCmd = ['Unknown', 0.]
-        print('[*] Got cmd: %s, %.2f'%(self.income))
+        print('[*] Got cmd: %d, %.2f'%(self.income))
         return True
 
-    def Answer(self, Ans, Address):
+    def Send(self, Ans, Address):
         # отвечаем клиенту
         msg = struct.pack(self.packetStruct, *Ans)
         self.server.sendto(msg, Address) # send ack
 
     def Exec(self):
         """ выполняем команду """
-        cmd = self.income[0]
+        if self.income[0] in CMDR.keys():
+            cmd = CMDR[self.income[0]] # если команда известна, идём на её обработку
+        else:
+            cmd = 'Unknown'
+
         if cmd=='GetName':
-            self.outcome = (CMD[cmd], float(self.name))
-            self.Answer(self.outcome, self.senderAddr)
+            outcome = (CMD[cmd], float(self.name))
+        else:
+            print('[*] no code for execute this command...')
+            outcome = self.income
+        self.Send(outcome, self.senderAddr)
 
 
         # if command=='GetI':
@@ -119,12 +120,10 @@ class ServerUDP():
     #     self.U = U
 
 #%%
-
 with ServerUDP(bindPort=7003) as dev:
     while True:
         if dev.cmdIsReceived():
             dev.Exec()
-
 
 # %%
 # Класс приёмопередатчика UDP (основа для ЗУ и нагрузки)
@@ -137,44 +136,40 @@ class ServerClientUDP(ServerUDP):
         else:
             self.hostAddr = (hostIP, hostPort)
 
-        self.outCmd = ['Timeout', 0] # исходящая команда, на сервер
-        self.outAns = ['Timeout', 0] # ответ сервера
-
     def startSocket(self):
         super().startSocket()
         #% Достраиваем сокет
-        if self.hostIP is None:
-            self.hostIP = getIP()
-        self.hostAddr = (self.hostIP, self.hostPort)
         self.server.connect(self.hostAddr)
         print('[+] Connected to %s:%d' %(self.hostIP, self.hostPort))
 
-    def cliAck(self):
-        # запрашиваем сервер
-        msg = struct.pack(self.packetStruct,
-                          CMD[self.outCmd[0]], float(self.outCmd[1]))
-        self.server.sendto(msg, self.hostAddr) # send ack
+    def Exec(self): # переопределяем метод
+        """ выполняем команду """
+        cmd = self.income[0] # команда
+        serverAddr = self.senderAddr # адрес, с которого пришла команда
 
-    def cliIsReceived(self):
-        """ слушаем порт и определяем команду """
-        try:
-            packet, self.senderAddr = self.server.recvfrom(64)
-            #print('[*] ack from %s:%d'%(senderAddr[0], senderAddr[1]))
-            cmdIdx, data = struct.unpack(self.packetStruct, packet)
-            self.incomeCmd = [CMDR[cmdIdx], data]
-        except socket.timeout:
-            self.incomeCmd = ['Timeout', 0.]
-            return False
-        except KeyboardInterrupt:
-            print('\n[!] Ctrl+C, exiting...')
-            exit()
-        except Exception():
-            self.incomeCmd = ['Unknown', 0.]
-        finally:
-            print('[*] Got cmd: %s, %.2f'%(self.cmd, self.data))
-            return True
+        if cmd=='GetName':
+            outcome = (CMD[cmd], float(self.name))
+        elif cmd=='GetChildName':
+            outcome = (CMD['GetName'], 0.)
+            self.Send(outcome, self.hostAddr)
+            while True: # циклимся на время ожидания ответа
+                if self.cmdIsReceived(): # когда получили
+                    if self.senderAddr==self.hostAddr: # и если от слейва
+                        outcome = self.income # транслируем наверх
+                    else: # иначе - ответ "нет ответа от слейва"
+                        outcome = (CMD['NoAnsFromChild'], 0.)
+                    break
+
+        else:
+            print('[*] no code for execute this command...')
+            outcome = self.income
+
+        self.Send(outcome, serverAddr)
 
 
+
+
+#%%
 class Charger(Device):
     def execute(self, command, data):
         """ выполняем команду """

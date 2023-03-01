@@ -15,7 +15,8 @@ CMD = {'Timeout':-2, #выход по таймауту
        'GetU':1, 'SetU':2,
        'GetI':3, 'SetI':4,
        'GetC':5, 'SetC':6,
-       'Unknown':100}
+       'GetChildName':7,
+       'Unknown':100, 'NoAnsFromChild':101}
 CMDR = {} # ревёрснутый массив кодов
 for key, val in CMD.items():
     CMDR[val] = key
@@ -74,24 +75,15 @@ class Communicator():
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-
-
-
-
-
 #%%
 comm = Communicator(hostPort=7003)
 comm.connect()
 
 #%%
-comm.send('GetName', 0.)
+comm.send('Unknown', 0.)
 Ans = comm.listen()
 print(Ans)
 
 
 #%%
 comm.close()
-
-
-
-
