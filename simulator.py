@@ -79,6 +79,9 @@ class ServerUDP():
             self.income = struct.unpack(self.packetStruct, packet)
         except socket.timeout:
             return False
+        except struct.error:
+            print('[!] Unknown packet format: ', packet)
+            return False
         print('[*] Got cmd: %d, %.2f'%(self.income))
         return True
 
@@ -101,24 +104,7 @@ class ServerUDP():
             outcome = self.income
         self.Send(outcome, self.senderAddr)
 
-
-        # if command=='GetI':
-        #     return (CMD[command], self.I)
-        # if command=='GetU':
-        #     return (CMD[command], self.U)
-        # if command=='SetI':
-        #     self.setI(data)
-        #     return (CMD[command], self.I)
-        # if command=='SetU':
-        #     self.setU(data)
-        #     return (CMD[command], self.U)
-
-    # def setI(self, I):
-    #     self.I = I
-    # def setU(self, U):
-    #     self.U = U
-
-##%% Проверка
+# #%% Проверка
 # with ServerUDP(bindPort=7003) as dev:
 #     while True:
 #         if dev.cmdIsReceived():
@@ -167,33 +153,52 @@ class ServerClientUDP(ServerUDP):
 
         self.Send(outcome, serverAddr)
 
-#%% Проверка
-with ServerClientUDP(bindPort=7004, hostPort=7003) as dev:
-    while True:
-        if dev.cmdIsReceived():
-            dev.Exec()
+# #%% Проверка
+# with ServerClientUDP(bindPort=7004, hostPort=7003) as dev:
+#     while True:
+#         if dev.cmdIsReceived():
+#             dev.Exec()
 
 #%%
-class Charger(Device):
-    def execute(self, command, data):
-        """ выполняем команду """
-        super().execute(self, command, data) # метод родителя
-        if command=='SetI' or command=='GetI':
+class CDU(ServerClientUDP):
+    def __init__(self, bindPort, hostPort, hostIP=None):
+        super().__init__(bindPort, hostPort, hostIP)
+        self.I = 0.
+        self.U = 0.
+
+    def Exec(self): # переопределяем метод
+        """ выполняем принятую команду """
+        serverAddr = self.senderAddr # адрес, с которого пришла команда
+        if self.income[0] in CMDR.keys():
+            cmd = CMDR[self.income[0]] # если команда известна, идём на её обработку
+        else:
+            cmd = 'Unknown'
+        data = self.income[1]
+        # отрабатываем команды
+        if cmd=='GetName':
+            outcome = (CMD[cmd], float(self.name))
+        elif cmd=='GetChildName':
+            outcome = self.AckChild((CMD['GetName'], 0.), serverAddr)
+        elif cmd=='GetI':
+            outcome = (CMD[cmd], self.I)
+        elif cmd=='SetI':
             self.I = data
-            return (CMD[command], self.I)
-        if command=='SetI' or command=='GetI':
-            self.I = data
-            return (CMD[command], self.I)
-    def setI(self, I):
-        super().setI(I) # метод родителя, запись соотв. свойства
-        self.send((CMD['SetI'], I)) # дополняем отправкой в хост-объект
+            outcome = self.AckChild(self.income, serverAddr) # ставим ток
+        elif cmd=='GetU':
+            outcome = self.AckChild(self.income, serverAddr) # ставим напряжение
+            self.U = outcome[1]
+        else:
+            print('[*] no code for execute this command...')
+            outcome = self.income
+        self.Send(outcome, serverAddr)
 
 #%% Класс аккумулятора
 def fun(x,a,b,c,d,e):
     return c+a*np.exp(b*x)+d*np.exp(e*x)
 
-class Accumulator():
-    def __init__(self, Cnom=2.7):
+class Accumulator(ServerUDP):
+    def __init__(self, bindPort, Cnom=2.7):
+        super().__init__(bindPort)
         # параметры аккумулятора
         self.Cnom = Cnom
         self.I = 0
@@ -213,30 +218,81 @@ class Accumulator():
         # sol = odeint(myode, y0, t, args=(fan,), hmax=0.01) #, hmax=0.01
         # y0 = sol[-1,:]
         self.C += self.I *(tNow - self.tPrev)/3600
-        self.C = np.clip(self.C, 0, self.Cnom)
+        self.C = np.clip(self.C, 0, self.Cnom) # без эффектов перезаряда/переразряда
         self.SoC = self.C/self.Cnom
         self.tPrev = tNow
         SoC1 = 1-self.SoC
         self.U = fun(SoC1, *self.__UocParams) + self.I*fun(SoC1, *self.__RintParams)/self.Cnom
 
+    def Exec(self): # переопределяем метод
+        if self.income[0] in CMDR.keys():
+            cmd = CMDR[self.income[0]] # если команда известна, идём на её обработку
+        else:
+            cmd = 'Unknown'
+        data = self.income[1]
+        if cmd=='GetName':
+            outcome = (CMD[cmd], float(self.name))
+        elif cmd=='GetI':
+            outcome = (CMD[cmd], self.I)
+        elif cmd=='SetI':
+            self.I = data # ставим ток
+            outcome = self.income
+        elif cmd=='GetU':
+            self.calcState()
+            outcome = (CMD[cmd], self.U)
+        elif cmd=='GetC':
+            outcome = (CMD[cmd], self.C)
+        elif cmd=='SetC':
+            self.C = data
+            outcome = (CMD[cmd], self.C)
+        else:
+            print('[*] no code for execute this command...')
+            outcome = self.income
+        self.Send(outcome, self.senderAddr)
+
 # acc = Accumulator()
-# %%
+# #%% Проверка кода аккумулятора
 # acc.I = -10
 # acc.calcState()
 # acc.U
 
 #%% Основной код
+msg = """Программный симулятор литий-ионного аккумулятора,
+зарядного и разрядного устройства (стабилизаторы тока).
+Это простейшие сервера, обменивающиеся посылками и меняющие состояние друг друга.
+Для деталей смотри документацию. """
+""" Вызов: python3 simulator.py
+Параметры:
+    1. 'CDU'/'ACC'
+    2. bindPort
+
+"""
 if __name__ == "__main__":
-    if len(sys.argv)<2:
-        bind_port = 6505
-    else:
-        bind_port = int(sys.argv[1])
+    import argparse
 
-    with Device() as dev:
-        while dev.listen():
-            pass
+    # Initialize parser
+    parser = argparse.ArgumentParser(description = msg)
+    # Позиционные аргументы
+    parser.add_argument("type", type=str, help = 'Тип устройства: CDU-зарядно-разрядное, ACC-аккумулятор (строки без кавычек)')
+    parser.add_argument("bindPort", type=int, help = "Номер входящего (прослушиваемого) порта, для команд")
+    # Опциональные аргументы
+    parser.add_argument("--Cnom", type=float, default=2.7, help = '[ACC] Номинальная ёмкость ЛИА')
+    parser.add_argument("--hostPort", help = '[CDU] порт, занятый симулятором аккумулятора')
+    parser.add_argument("--hostIP", default=None, help = '[CDU] сетевой адрес, занятый симулятором аккумулятора')
+    ns = parser.parse_args()
 
-else:
-    with Device() as dev:
-        while dev.listen():
-            pass
+    if ns.type=='CDU':
+        with CDU(bindPort=ns.bindPort, hostPort=ns.hostPort,
+                 hostIP=ns.hostIP) as dev:
+            while True:
+                if dev.cmdIsReceived():
+                    dev.Exec()
+
+    elif ns.type=='ACC':
+        with Accumulator(bindPort=ns.bindPort, Cnom=ns.Cnom) as dev:
+            while True:
+                if dev.cmdIsReceived():
+                    dev.Exec()
+
+
+
