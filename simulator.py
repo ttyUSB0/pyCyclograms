@@ -16,11 +16,9 @@ CMD = {'Timeout':-2, #выход по таймауту
        'GetC':5, 'SetC':6,
        'GetChildName':7,
        'Unknown':100, 'NoAnsFromChild':101}
-CMDR = {} # ревёрснутый массив кодов
+CMDR = {} # ревёрснутый массив кодов, вернёт номер по текстовой команде
 for key, val in CMD.items():
     CMDR[val] = key
-
-timeoutGreat = 90 # за это время НУ становятся нулевыми
 
 import socket
 import numpy as np
@@ -28,7 +26,6 @@ import numpy as np
 import time
 # import matplotlib.pyplot as plt
 import struct
-import sys
 
 # %% функции общего назначения
 clip = lambda n, minn, maxn: max(min(maxn, n), minn) # https://stackoverflow.com/a/5996949/5355749
@@ -82,7 +79,7 @@ class ServerUDP():
         except struct.error:
             print('[!] Unknown packet format: ', packet)
             return False
-        print('[*] Got cmd: %d, %.2f'%(self.income))
+        print('[*] cmd: %d, %.2f'%(self.income))
         return True
 
     def Send(self, Ans, Address):
@@ -117,9 +114,9 @@ class ServerClientUDP(ServerUDP):
     def __init__(self, bindPort, hostPort, hostIP=None):
         super().__init__(bindPort)
         if hostIP is None:
-            self.hostAddr = (getIP(), hostPort)
+            self.hostAddr = (getIP(), int(hostPort))
         else:
-            self.hostAddr = (hostIP, hostPort)
+            self.hostAddr = (hostIP, int(hostPort))
 
     def AckChild(self, outcome, Address):
         # запрос слейва hostAddr, потом реконнект к Address
@@ -241,6 +238,7 @@ class Accumulator(ServerUDP):
             self.calcState()
             outcome = (CMD[cmd], self.U)
         elif cmd=='GetC':
+            self.calcState()
             outcome = (CMD[cmd], self.C)
         elif cmd=='SetC':
             self.C = data
@@ -261,23 +259,18 @@ msg = """Программный симулятор литий-ионного а�
 зарядного и разрядного устройства (стабилизаторы тока).
 Это простейшие сервера, обменивающиеся посылками и меняющие состояние друг друга.
 Для деталей смотри документацию. """
-""" Вызов: python3 simulator.py
-Параметры:
-    1. 'CDU'/'ACC'
-    2. bindPort
-
+""" Вызов: python3 simulator.py --help
 """
 if __name__ == "__main__":
     import argparse
 
-    # Initialize parser
-    parser = argparse.ArgumentParser(description = msg)
+    parser = argparse.ArgumentParser(description=msg)
     # Позиционные аргументы
     parser.add_argument("type", type=str, help = 'Тип устройства: CDU-зарядно-разрядное, ACC-аккумулятор (строки без кавычек)')
     parser.add_argument("bindPort", type=int, help = "Номер входящего (прослушиваемого) порта, для команд")
     # Опциональные аргументы
     parser.add_argument("--Cnom", type=float, default=2.7, help = '[ACC] Номинальная ёмкость ЛИА')
-    parser.add_argument("--hostPort", help = '[CDU] порт, занятый симулятором аккумулятора')
+    parser.add_argument("--hostPort", type=int, help = '[CDU] порт, занятый симулятором аккумулятора')
     parser.add_argument("--hostIP", default=None, help = '[CDU] сетевой адрес, занятый симулятором аккумулятора')
     ns = parser.parse_args()
 
